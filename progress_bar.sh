@@ -4,9 +4,14 @@
 _pb_spin_idx=0
 _pb_spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
 
+# Color state
+_pb_color_mode=auto  # auto | none | <fixed>
+_pb_color_code=""    # ANSI color escape for fixed mode
+
 # Async state
 _pb_async_file=""
 _pb_async_pid=""
+_pb_log_pipe=""
 
 # progress_bar_set_spinner <style>
 #   Switch spinner style at any time (resets frame index).
@@ -25,6 +30,39 @@ progress_bar_set_spinner() {
         circle)  _pb_spin_chars=('◐' '◓' '◑' '◒')                                                       ;;
         braille|*) _pb_spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')                        ;;
     esac
+}
+
+# progress_bar_set_color <mode>
+#   Set the color mode for the filled bar segment.
+#   Modes:
+#     auto (default)  Red <33%, yellow 33-65%, green >=66%
+#     none            No color
+#     red | yellow | green | cyan | blue | magenta  Fixed color
+progress_bar_set_color() {
+    local ESC=$'\033'
+    _pb_color_mode="${1:-auto}"
+    case "$_pb_color_mode" in
+        none|auto) _pb_color_code="" ;;
+        red)     _pb_color_code="${ESC}[31m" ;;
+        yellow)  _pb_color_code="${ESC}[33m" ;;
+        green)   _pb_color_code="${ESC}[32m" ;;
+        cyan)    _pb_color_code="${ESC}[36m" ;;
+        blue)    _pb_color_code="${ESC}[34m" ;;
+        magenta) _pb_color_code="${ESC}[35m" ;;
+        *)       _pb_color_mode=auto; _pb_color_code="" ;;
+    esac
+}
+
+# pb_log <message>
+#   Safe replacement for echo during async progress bar usage.
+#   In async mode: routes output through the renderer to prevent interleaving.
+#   In sync mode: behaves exactly like echo.
+pb_log() {
+    if [[ -n "$_pb_log_pipe" ]]; then
+        printf '%s\n' "$*" >&7
+    else
+        echo "$@"
+    fi
 }
 
 # progress_bar_init
@@ -81,9 +119,26 @@ progress_bar() {
     local filled=$(( current * width / total ))
     local empty=$(( width - filled ))
 
-    local bar="" i
-    for (( i=0; i<filled; i++ )); do bar+='█'; done
-    for (( i=0; i<empty;  i++ )); do bar+='░'; done
+    local ESC=$'\033'
+    local color=""
+    if [[ "$_pb_color_mode" == auto ]]; then
+        if   (( percent >= 66 )); then color="${ESC}[32m"
+        elif (( percent >= 33 )); then color="${ESC}[33m"
+        else                           color="${ESC}[31m"
+        fi
+    elif [[ "$_pb_color_mode" != none ]]; then
+        color="$_pb_color_code"
+    fi
+
+    local filled_bar="" empty_bar="" i
+    for (( i=0; i<filled; i++ )); do filled_bar+='█'; done
+    for (( i=0; i<empty;  i++ )); do empty_bar+='░'; done
+    local bar
+    if [[ -n "$color" ]]; then
+        bar="${color}${filled_bar}${ESC}[0m${empty_bar}"
+    else
+        bar="${filled_bar}${empty_bar}"
+    fi
 
     local spinner="${_pb_spin_chars[$_pb_spin_idx]}"
     _pb_spin_idx=$(( (_pb_spin_idx + 1) % ${#_pb_spin_chars[@]} ))
@@ -109,9 +164,17 @@ progress_bar_start() {
     local total=$1
     local label=${2:-""}
     local spin_chars=("${_pb_spin_chars[@]}")  # snapshot at start time
+    local color_mode="$_pb_color_mode"         # snapshot color settings at start time
+    local color_code="$_pb_color_code"
 
     _pb_async_file=$(mktemp)
     printf '0\n' > "$_pb_async_file"
+
+    # Create a named FIFO for log-safe output; open both ends on fd 7 before
+    # forking so the subshell inherits the descriptor without blocking.
+    _pb_log_pipe=$(mktemp -u /tmp/pb_log.XXXXXX)
+    mkfifo "$_pb_log_pipe"
+    exec 7<>"$_pb_log_pipe"
 
     progress_bar_init
 
@@ -120,8 +183,15 @@ progress_bar_start() {
     # stty size </dev/tty reliably queries terminal dimensions from a background process
     # (tput lines/cols can fail when stdin is /dev/null).
     (
+        local ESC=$'\033'
         local spin_idx=0
         while [[ -f "$_pb_async_file" ]]; do
+            # Flush any pending pb_log lines before drawing the bar
+            local _pb_line
+            while IFS= read -r -t 0.001 _pb_line <&7 2>/dev/null; do
+                printf '%s\n' "$_pb_line" >/dev/tty
+            done
+
             local current
             current=$(< "$_pb_async_file")
             if [[ "$current" =~ ^[0-9]+$ ]]; then
@@ -135,9 +205,26 @@ progress_bar_start() {
 
                 local percent=$(( current * 100 / total ))
                 local filled=$(( current * width / total ))
-                local bar="" i
-                for (( i=0; i<filled; i++ )); do bar+='█'; done
-                for (( i=0; i<width-filled; i++ )); do bar+='░'; done
+
+                local color=""
+                if [[ "$color_mode" == auto ]]; then
+                    if   (( percent >= 66 )); then color="${ESC}[32m"
+                    elif (( percent >= 33 )); then color="${ESC}[33m"
+                    else                           color="${ESC}[31m"
+                    fi
+                elif [[ "$color_mode" != none ]]; then
+                    color="$color_code"
+                fi
+
+                local filled_bar="" empty_bar="" i
+                for (( i=0; i<filled; i++ )); do filled_bar+='█'; done
+                for (( i=0; i<width-filled; i++ )); do empty_bar+='░'; done
+                local bar
+                if [[ -n "$color" ]]; then
+                    bar="${color}${filled_bar}${ESC}[0m${empty_bar}"
+                else
+                    bar="${filled_bar}${empty_bar}"
+                fi
 
                 local spinner="${spin_chars[$spin_idx]}"
                 spin_idx=$(( (spin_idx + 1) % ${#spin_chars[@]} ))
@@ -169,6 +256,14 @@ progress_bar_update() {
 progress_bar_stop() {
     rm -f "$_pb_async_file"
     wait "$_pb_async_pid" 2>/dev/null
+    # Drain any pb_log messages that arrived after the renderer's last tick
+    local _pb_line
+    while IFS= read -r -t 0.001 _pb_line <&7 2>/dev/null; do
+        printf '%s\n' "$_pb_line"
+    done
+    exec 7>&-
+    rm -f "$_pb_log_pipe"
+    _pb_log_pipe=""
     progress_bar_done
 }
 
@@ -203,11 +298,11 @@ demo_labeled() {
 demo_async() {
     local total=20
     progress_bar_start "$total" "Computing"
-    echo "Async: bar animates while work runs at variable speed:"
+    pb_log "Async: bar animates while work runs at variable speed:"
     for (( i=0; i<=total; i++ )); do
         sleep 0.$(( RANDOM % 15 + 5 ))  # 50–150 ms of "work"
         progress_bar_update "$i"
-        echo "  Step $i done"
+        pb_log "  Step $i done"
     done
     progress_bar_stop
 }

@@ -5,11 +5,16 @@ $script:_pb_spin_idx = 0
 $script:_pb_spin_chars = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
 $script:_pb_esc = [char]27
 
+# Color state
+$script:_pb_color_mode = 'auto'   # auto | none | <fixed>
+$script:_pb_color_code = ''       # ANSI color string for fixed mode
+
 # Async state
-$script:_pb_sync       = $null
-$script:_pb_runspace   = $null
-$script:_pb_ps         = $null
+$script:_pb_sync         = $null
+$script:_pb_runspace     = $null
+$script:_pb_ps           = $null
 $script:_pb_async_handle = $null
+$script:_pb_log_queue    = $null
 
 # Set-ProgressBarSpinner [-Style <string>]
 #   Switch spinner style at any time (resets frame index).
@@ -28,6 +33,40 @@ function Set-ProgressBarSpinner {
         'Bounce'  { @('▁', '▂', '▃', '▄', '▅', '▆', '▇', '█', '▇', '▆', '▅', '▄', '▃', '▂') }
         'Circle'  { @('◐', '◓', '◑', '◒') }
         default   { @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏') }
+    }
+}
+
+# Set-ProgressBarColor [-Mode <string>]
+#   Set the color mode for the filled bar segment.
+#   Modes:
+#     Auto (default)  Red <33%, yellow 33-65%, green >=66%
+#     None            No color
+#     Red | Yellow | Green | Cyan | Blue | Magenta  Fixed color
+function Set-ProgressBarColor {
+    param([string]$Mode = 'Auto')
+    $esc = $script:_pb_esc
+    $script:_pb_color_mode = $Mode
+    $script:_pb_color_code = switch ($Mode) {
+        'Red'     { "${esc}[31m" }
+        'Yellow'  { "${esc}[33m" }
+        'Green'   { "${esc}[32m" }
+        'Cyan'    { "${esc}[36m" }
+        'Blue'    { "${esc}[34m" }
+        'Magenta' { "${esc}[35m" }
+        default   { '' }
+    }
+}
+
+# Write-PBLog [-Message] <string>
+#   Safe replacement for Write-Host during async progress bar usage.
+#   In async mode: routes output through the renderer to prevent interleaving.
+#   In sync mode: behaves exactly like Write-Host.
+function Write-PBLog {
+    param([Parameter(ValueFromPipeline)][string]$Message)
+    if ($script:_pb_log_queue) {
+        $script:_pb_log_queue.Enqueue($Message)
+    } else {
+        Write-Host $Message
     }
 }
 
@@ -84,7 +123,18 @@ function Write-ProgressBar {
     $empty   = $width - $filled
 
     # String multiplication is character-level in .NET (safe for multibyte Unicode)
-    $bar = ('█' * $filled) + ('░' * $empty)
+    $filledBar = '█' * $filled
+    $emptyBar  = '░' * $empty
+    $color = switch ($script:_pb_color_mode) {
+        'Auto' {
+            if     ($percent -ge 66) { "${esc}[32m" }
+            elseif ($percent -ge 33) { "${esc}[33m" }
+            else                     { "${esc}[31m" }
+        }
+        'None' { '' }
+        default { $script:_pb_color_code }
+    }
+    $bar = if ($color) { "${color}${filledBar}${esc}[0m${emptyBar}" } else { "${filledBar}${emptyBar}" }
 
     $spinner = $script:_pb_spin_chars[$script:_pb_spin_idx]
     $script:_pb_spin_idx = ($script:_pb_spin_idx + 1) % $script:_pb_spin_chars.Count
@@ -121,16 +171,21 @@ function Start-ProgressBar {
     if ($initRows -le 0) { $initRows = 24 }
     if ($initCols -le 0) { $initCols = 80 }
 
+    $script:_pb_log_queue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+
     $script:_pb_sync = [hashtable]::Synchronized(@{
-        Current   = 0
-        Total     = $Total
-        Label     = $Label
-        Running   = $true
-        SpinIdx   = 0
-        SpinChars = $script:_pb_spin_chars
-        Esc       = $script:_pb_esc
-        InitRows  = $initRows
-        InitCols  = $initCols
+        Current    = 0
+        Total      = $Total
+        Label      = $Label
+        Running    = $true
+        SpinIdx    = 0
+        SpinChars  = $script:_pb_spin_chars
+        Esc        = $script:_pb_esc
+        InitRows   = $initRows
+        InitCols   = $initCols
+        ColorMode  = $script:_pb_color_mode
+        ColorCode  = $script:_pb_color_code
+        LogQueue   = $script:_pb_log_queue
     })
 
     Initialize-ProgressBar
@@ -143,6 +198,12 @@ function Start-ProgressBar {
     $script:_pb_ps.Runspace = $script:_pb_runspace
     [void]$script:_pb_ps.AddScript({
         while ($sync.Running) {
+            # Flush any pending Write-PBLog messages before drawing the bar
+            $msg = $null
+            while ($sync.LogQueue.TryDequeue([ref]$msg)) {
+                [Console]::WriteLine($msg)
+            }
+
             $esc   = $sync.Esc
             $rows  = [Console]::WindowHeight
             $cols  = [Console]::WindowWidth
@@ -160,7 +221,19 @@ function Start-ProgressBar {
             $percent  = [Math]::Floor($current * 100 / $total)
             $filled   = [Math]::Floor($current * $width / $total)
             $empty    = $width - $filled
-            $bar      = ('█' * $filled) + ('░' * $empty)
+
+            $filledBar = '█' * $filled
+            $emptyBar  = '░' * $empty
+            $color = switch ($sync.ColorMode) {
+                'Auto' {
+                    if     ($percent -ge 66) { "${esc}[32m" }
+                    elseif ($percent -ge 33) { "${esc}[33m" }
+                    else                     { "${esc}[31m" }
+                }
+                'None' { '' }
+                default { $sync.ColorCode }
+            }
+            $bar = if ($color) { "${color}${filledBar}${esc}[0m${emptyBar}" } else { "${filledBar}${emptyBar}" }
 
             $spinner  = $sync.SpinChars[$sync.SpinIdx]
             $sync.SpinIdx = ($sync.SpinIdx + 1) % $sync.SpinChars.Count
@@ -200,6 +273,12 @@ function Stop-ProgressBar {
     $script:_pb_ps.Dispose()
     $script:_pb_runspace.Close()
     $script:_pb_runspace.Dispose()
+    # Drain any Write-PBLog messages that arrived after the renderer's last tick
+    $msg = $null
+    while ($script:_pb_log_queue.TryDequeue([ref]$msg)) {
+        Write-Host $msg
+    }
+    $script:_pb_log_queue = $null
     Complete-ProgressBar
 }
 
@@ -234,11 +313,11 @@ function demo_labeled {
 function demo_async {
     $total = 20
     Start-ProgressBar -Total $total -Label "Computing"
-    Write-Host "Async: bar animates while work runs at variable speed:"
+    Write-PBLog "Async: bar animates while work runs at variable speed:"
     for ($i = 0; $i -le $total; $i++) {
         Start-Sleep -Milliseconds (Get-Random -Minimum 50 -Maximum 150)  # variable "work"
         Update-ProgressBar -Current $i
-        Write-Host "  Step $i done"
+        Write-PBLog "  Step $i done"
     }
     Stop-ProgressBar
 }

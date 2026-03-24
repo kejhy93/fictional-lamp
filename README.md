@@ -2,6 +2,8 @@
 
 A lightweight progress bar for Bash and PowerShell that pins itself to the last line of the terminal. Regular script output scrolls normally above it without ever overwriting the bar.
 
+![demo](demo.gif)
+
 ## Features
 
 - Pinned to the last terminal line via ANSI scroll region — output above never clobbers it
@@ -49,7 +51,7 @@ progress_bar_start 100 "Installing"
 for (( i=0; i<=100; i++ )); do
     do_work "$i"           # variable-length work — bar keeps spinning
     progress_bar_update "$i"
-    echo "Step $i done"
+    pb_log "Step $i done"
 done
 
 progress_bar_stop
@@ -98,11 +100,59 @@ progress_bar_stop
 progress_bar_set_spinner classic
 ```
 
+**Color**
+
+| Function | Signature | Description |
+|---|---|---|
+| `progress_bar_set_color` | `progress_bar_set_color <mode>` | Set color mode for the filled bar segment. |
+
+Color modes:
+
+| Mode | Behavior |
+|---|---|
+| `auto` _(default)_ | Red < 33%, yellow 33–65%, green ≥ 66% |
+| `none` | No color |
+| `red` \| `yellow` \| `green` \| `cyan` \| `blue` \| `magenta` | Fixed color |
+
+```bash
+progress_bar_set_color auto    # default: percent-based
+progress_bar_set_color green   # always green
+progress_bar_set_color none    # disable color
+```
+
+**Log-safe output**
+
+| Function | Signature | Description |
+|---|---|---|
+| `pb_log` | `pb_log <message>` | Safe `echo` replacement during async bar usage. |
+
+In async mode `echo` and the background renderer write to the terminal concurrently, which can cause visual glitches in some terminals. `pb_log` routes output through the renderer so all terminal writes are serialized. In sync mode it falls back to plain `echo`.
+
+```bash
+progress_bar_start 100 "Installing"
+for (( i=0; i<=100; i++ )); do
+    do_work "$i"
+    progress_bar_update "$i"
+    pb_log "Step $i done"   # use pb_log instead of echo in async mode
+done
+progress_bar_stop
+```
+
 ### Running the demo
 
 ```bash
 bash progress_bar.sh
 ```
+
+### Regenerating the demo GIF
+
+The repo includes a `demo.tape` (VHS script) and a helper that checks dependencies before recording:
+
+```bash
+./generate_demo.sh
+```
+
+Requires `vhs`, `ffmpeg`, and `ttyd`. The script prints install instructions if any are missing.
 
 ## PowerShell
 
@@ -141,7 +191,7 @@ Start-ProgressBar -Total 100 -Label "Installing"
 for ($i = 0; $i -le 100; $i++) {
     Invoke-Work $i           # variable-length work — bar keeps spinning
     Update-ProgressBar -Current $i
-    Write-Host "Step $i done"
+    Write-PBLog "Step $i done"
 }
 
 Stop-ProgressBar
@@ -188,6 +238,44 @@ Stop-ProgressBar
 
 ```powershell
 Set-ProgressBarSpinner -Style Classic
+```
+
+**Color**
+
+| Function | Signature | Description |
+|---|---|---|
+| `Set-ProgressBarColor` | `Set-ProgressBarColor [-Mode s]` | Set color mode for the filled bar segment. |
+
+Color modes:
+
+| Mode | Behavior |
+|---|---|
+| `Auto` _(default)_ | Red < 33%, yellow 33–65%, green ≥ 66% |
+| `None` | No color |
+| `Red` \| `Yellow` \| `Green` \| `Cyan` \| `Blue` \| `Magenta` | Fixed color |
+
+```powershell
+Set-ProgressBarColor -Mode Auto    # default: percent-based
+Set-ProgressBarColor -Mode Green   # always green
+Set-ProgressBarColor -Mode None    # disable color
+```
+
+**Log-safe output**
+
+| Function | Signature | Description |
+|---|---|---|
+| `Write-PBLog` | `Write-PBLog <message>` | Safe `Write-Host` replacement during async bar usage. |
+
+In async mode `Write-Host` and the background runspace write to the terminal concurrently, which can cause visual glitches. `Write-PBLog` routes output through the renderer so all terminal writes are serialized. In sync mode it falls back to plain `Write-Host`.
+
+```powershell
+Start-ProgressBar -Total 100 -Label "Installing"
+for ($i = 0; $i -le 100; $i++) {
+    Invoke-Work $i
+    Update-ProgressBar -Current $i
+    Write-PBLog "Step $i done"   # use Write-PBLog instead of Write-Host in async mode
+}
+Stop-ProgressBar
 ```
 
 ### Running the demo
