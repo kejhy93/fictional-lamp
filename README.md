@@ -1,16 +1,22 @@
 # bash-progress-bar
 
-A lightweight, dependency-free bash progress bar that pins itself to the last line of the terminal. Regular script output scrolls normally above it without ever overwriting the bar.
+A lightweight progress bar for Bash and PowerShell that pins itself to the last line of the terminal. Regular script output scrolls normally above it without ever overwriting the bar.
 
 ## Features
 
-- Pinned to the last terminal line via `tput csr` (scroll region) — output above never clobbers it
+- Pinned to the last terminal line via ANSI scroll region — output above never clobbers it
 - Auto-scales bar width to the current terminal width
 - Optional label (left-aligned, up to 20 chars)
 - Braille spinner that advances on every call to indicate activity
-- Pure bash + `tput` — no external dependencies beyond `ncurses`
+- No external dependencies beyond the shell itself
 
-## Usage
+## Bash
+
+### Requirements
+
+`bash` and `tput` (part of `ncurses`, standard on Linux/macOS).
+
+### Usage
 
 Source the script into your own script, then wrap your work between `progress_bar_init` and `progress_bar_done`:
 
@@ -49,12 +55,57 @@ progress_bar_done
 bash progress_bar.sh
 ```
 
-This runs two demos: a simple unlabeled bar and a multi-phase labeled bar.
+## PowerShell
+
+### Requirements
+
+PowerShell 5.1+ on Windows 10 / Windows Terminal, or PowerShell 7+ on Linux/macOS. Requires a VT-compatible terminal (Windows Terminal, iTerm2, most Linux terminals).
+
+### Usage
+
+Dot-source the script into your own script, then wrap your work between `Initialize-ProgressBar` and `Complete-ProgressBar`:
+
+```powershell
+. ./progress_bar.ps1
+
+Initialize-ProgressBar
+
+$total = 100
+for ($i = 0; $i -le $total; $i++) {
+    Write-Host "Processing item $i..."   # scrolls normally above the bar
+    Write-ProgressBar -Current $i -Total $total -Label "Installing"
+    Start-Sleep -Milliseconds 50
+}
+
+Complete-ProgressBar
+```
+
+### API
+
+| Function | Signature | Description |
+|---|---|---|
+| `Initialize-ProgressBar` | `Initialize-ProgressBar` | Call once before the first `Write-ProgressBar`. Reserves the last terminal line. |
+| `Write-ProgressBar` | `Write-ProgressBar -Current n -Total n [-Label s]` | Draws the bar. Safe to call inside loops that also `Write-Host`. |
+| `Complete-ProgressBar` | `Complete-ProgressBar` | Call once when finished. Restores the terminal to its normal state. |
+
+**Parameters for `Write-ProgressBar`:**
+
+- `-Current` — current step (0 to `-Total`)
+- `-Total` — total number of steps
+- `-Label` _(optional)_ — text printed left of the bar, truncated/padded to 20 characters
+
+### Running the demo
+
+```powershell
+pwsh progress_bar.ps1
+```
 
 ## How it works
 
-`progress_bar_init` calls `tput csr 0 $(( rows - 2 ))` to shrink the terminal scroll region, excluding the last row. Any `echo` or `printf` output will only ever scroll within that region, leaving the last line untouched.
+Both implementations use the same ANSI terminal mechanism:
 
-`progress_bar` uses `tput sc` to save the cursor, jumps to the last line with `tput cup`, draws the bar, then restores the cursor with `tput rc` — so regular output continues from exactly where it left off.
+1. **Init** sets the scroll region (ANSI `ESC[top;bottomr` / `tput csr`) to exclude the last row. Any output will only ever scroll within that region, leaving the last line untouched.
+2. **Draw** saves the cursor (`ESC 7` / `tput sc`), jumps to the last line (`ESC[row;colH` / `tput cup`), draws the bar, then restores the cursor (`ESC 8` / `tput rc`) — so regular output continues from exactly where it left off.
+3. **Done** resets the scroll region to full height and clears the reserved line.
 
-`progress_bar_done` resets the scroll region to full height and clears the reserved line.
+Unicode bar characters (`█`, `░`, braille spinner) are built via string concatenation in both implementations — never with byte-oriented tools like `tr` — so multibyte UTF-8 characters are never corrupted.
