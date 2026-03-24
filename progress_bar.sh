@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 
+# Spinner state (global so it persists across calls)
+_pb_spin_idx=0
+_pb_spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+
 # progress_bar <current> <total> [label]
 #   current - current step (0..total)
 #   total   - total number of steps
 #   label   - optional label printed before the bar (max 20 chars)
 #
 # Bar width auto-scales to the current terminal width.
+# A spinner rotates on each call to indicate activity.
 progress_bar() {
     local current=$1
     local total=$2
@@ -14,14 +19,13 @@ progress_bar() {
     local cols
     cols=$(tput cols 2>/dev/null || echo 80)
 
-    # Calculate bar width from available terminal columns.
-    # Overhead without label: "[" + bar + "] NNN%" = 7 chars
-    # Overhead with label:    "%-20s [" + bar + "] NNN%" = 28 chars
+    # Overhead without label: "[" + bar + "] NNN% ⠋" = 9 chars
+    # Overhead with label:    "%-20s [" + bar + "] NNN% ⠋" = 30 chars
     local overhead
     if [[ -n "$label" ]]; then
-        overhead=28
+        overhead=30
     else
-        overhead=7
+        overhead=9
     fi
     local width=$(( cols - overhead ))
     (( width < 1 )) && width=1
@@ -34,10 +38,13 @@ progress_bar() {
     for (( i=0; i<filled; i++ )); do bar+='█'; done
     for (( i=0; i<empty;  i++ )); do bar+='░'; done
 
+    local spinner="${_pb_spin_chars[$_pb_spin_idx]}"
+    _pb_spin_idx=$(( (_pb_spin_idx + 1) % ${#_pb_spin_chars[@]} ))
+
     if [[ -n "$label" ]]; then
-        printf "\r%-20s [%s] %3d%%" "$label" "$bar" "$percent"
+        printf "\r%-20s [%s] %3d%% %s" "$label" "$bar" "$percent" "$spinner"
     else
-        printf "\r[%s] %3d%%" "$bar" "$percent"
+        printf "\r[%s] %3d%% %s" "$bar" "$percent" "$spinner"
     fi
 }
 
