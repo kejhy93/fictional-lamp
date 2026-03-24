@@ -30,8 +30,9 @@ progress_bar() {
     local filled=$(( current * width / total ))
     local empty=$(( width - filled ))
 
-    local bar
-    bar="$(printf '%0.s█' $(seq 1 $filled))$(printf '%0.s░' $(seq 1 $empty))"
+    local bar="" i
+    for (( i=0; i<filled; i++ )); do bar+='█'; done
+    for (( i=0; i<empty;  i++ )); do bar+='░'; done
 
     if [[ -n "$label" ]]; then
         printf "\r%-20s [%s] %3d%%" "$label" "$bar" "$percent"
@@ -60,8 +61,9 @@ demo_labeled() {
             progress_bar "$i" "$total" "$label"
             sleep 0.03
         done
-        echo
+        # no echo here — next label overwrites the same line
     done
+    echo    # final newline after all labels
 }
 
 demo_simple
