@@ -1,6 +1,6 @@
 # bash-progress-bar
 
-A lightweight progress bar for Bash and PowerShell that pins itself to the last line of the terminal. Regular script output scrolls normally above it without ever overwriting the bar.
+A lightweight progress bar that pins itself to the last line of the terminal. Regular script output scrolls normally above it without ever overwriting the bar.
 
 ![demo](demo.gif)
 
@@ -10,302 +10,32 @@ A lightweight progress bar for Bash and PowerShell that pins itself to the last 
 - Auto-scales bar width to the current terminal width
 - Optional label (left-aligned, up to 20 chars)
 - Spinner with 5 built-in styles (braille, classic, arrows, bounce, circle)
-- Synchronous mode: caller drives the bar each iteration
-- Async mode: bar animates in the background while the calculation runs freely
-- No external dependencies beyond the shell itself
+- Color modes: auto (percent-based), fixed, or none
+- Synchronous and async modes
+- No external dependencies beyond the language runtime
 
-## Bash
+## Languages
 
-### Requirements
-
-`bash` and `tput` (part of `ncurses`, standard on Linux/macOS).
-
-### Synchronous usage
-
-Source the script and drive the bar from your own loop:
-
-```bash
-source progress_bar.sh
-
-progress_bar_init
-
-total=100
-for (( i=0; i<=total; i++ )); do
-    echo "Processing item $i..."
-    progress_bar "$i" "$total" "Installing"
-    sleep 0.05
-done
-
-progress_bar_done
-```
-
-### Async usage
-
-The bar runs in a background process and animates on its own. Your code just calls `progress_bar_update` whenever progress changes:
-
-```bash
-source progress_bar.sh
-
-progress_bar_start 100 "Installing"
-
-for (( i=0; i<=100; i++ )); do
-    do_work "$i"           # variable-length work — bar keeps spinning
-    progress_bar_update "$i"
-    pb_log "Step $i done"
-done
-
-progress_bar_stop
-```
-
-### API
-
-**Synchronous**
-
-| Function | Signature | Description |
+| Language | File | README |
 |---|---|---|
-| `progress_bar_init` | `progress_bar_init` | Reserve the last terminal line. Call once before the loop. |
-| `progress_bar` | `progress_bar <current> <total> [label]` | Draw the bar. Call on each iteration. |
-| `progress_bar_done` | `progress_bar_done` | Restore the terminal. Call once after the loop. |
+| Bash | `bash/progress_bar.sh` | [bash/README.md](bash/README.md) |
+| PowerShell | `powershell/progress_bar.ps1` | [powershell/README.md](powershell/README.md) |
+| Java | `java/ProgressBar.java` | [java/README.md](java/README.md) |
 
-**Async**
+## How it works
 
-| Function | Signature | Description |
-|---|---|---|
-| `progress_bar_start` | `progress_bar_start <total> [label]` | Start the background renderer. |
-| `progress_bar_update` | `progress_bar_update <current>` | Send a progress value from the calculation. |
-| `progress_bar_stop` | `progress_bar_stop` | Stop the renderer and restore the terminal. |
+All implementations use the same ANSI terminal mechanism:
 
-**Spinner**
+1. **Init** sets the scroll region (`ESC[top;bottomr`) to exclude the last row. Output scrolls only within that region, leaving the last line untouched.
+2. **Draw** saves the cursor (`ESC 7`), jumps to the last line (`ESC[row;colH`), draws the bar, then restores the cursor (`ESC 8`) — so regular output resumes from exactly where it left off.
+3. **Done** resets the scroll region to full height and clears the reserved line.
 
-| Function | Signature | Description |
-|---|---|---|
-| `progress_bar_set_spinner` | `progress_bar_set_spinner <style>` | Switch spinner style. Resets the frame index. |
+In async mode the renderer runs in the background (subprocess in Bash, runspace in PowerShell, daemon thread in Java) and animates at ~20 fps independently of the calling code. A log queue serializes terminal writes so output never interleaves with the bar.
 
-**Parameters for `progress_bar` / `progress_bar_start`:**
-
-- `current` / `total` — current and total step count
-- `label` _(optional)_ — text printed left of the bar, truncated/padded to 20 characters
-
-**Spinner styles:**
-
-| Style | Preview |
-|---|---|
-| `braille` _(default)_ | `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` |
-| `classic` | `\| / - \` |
-| `arrows` | `← ↑ → ↓` |
-| `bounce` | `▁ ▂ ▃ ▄ ▅ ▆ ▇ █ ▇ ▆ ▅ ▄ ▃ ▂` |
-| `circle` | `◐ ◓ ◑ ◒` |
-
-```bash
-progress_bar_set_spinner classic
-```
-
-**Color**
-
-| Function | Signature | Description |
-|---|---|---|
-| `progress_bar_set_color` | `progress_bar_set_color <mode>` | Set color mode for the filled bar segment. |
-
-Color modes:
-
-| Mode | Behavior |
-|---|---|
-| `auto` _(default)_ | Red < 33%, yellow 33–65%, green ≥ 66% |
-| `none` | No color |
-| `red` \| `yellow` \| `green` \| `cyan` \| `blue` \| `magenta` | Fixed color |
-
-```bash
-progress_bar_set_color auto    # default: percent-based
-progress_bar_set_color green   # always green
-progress_bar_set_color none    # disable color
-```
-
-**Log-safe output**
-
-| Function | Signature | Description |
-|---|---|---|
-| `pb_log` | `pb_log <message>` | Safe `echo` replacement during async bar usage. |
-
-In async mode `echo` and the background renderer write to the terminal concurrently, which can cause visual glitches in some terminals. `pb_log` routes output through the renderer so all terminal writes are serialized. In sync mode it falls back to plain `echo`.
-
-```bash
-progress_bar_start 100 "Installing"
-for (( i=0; i<=100; i++ )); do
-    do_work "$i"
-    progress_bar_update "$i"
-    pb_log "Step $i done"   # use pb_log instead of echo in async mode
-done
-progress_bar_stop
-```
-
-### Running the demo
-
-```bash
-bash progress_bar.sh
-```
-
-### Regenerating the demo GIF
-
-The repo includes a `demo.tape` (VHS script) and a helper that checks dependencies before recording:
+## Regenerating the demo GIF
 
 ```bash
 ./generate_demo.sh
 ```
 
 Requires `vhs`, `ffmpeg`, and `ttyd`. The script prints install instructions if any are missing.
-
-## PowerShell
-
-### Requirements
-
-PowerShell 5.1+ on Windows 10 / Windows Terminal, or PowerShell 7+ on Linux/macOS. Requires a VT-compatible terminal (Windows Terminal, iTerm2, most Linux terminals).
-
-### Synchronous usage
-
-Dot-source the script and drive the bar from your own loop:
-
-```powershell
-. ./progress_bar.ps1
-
-Initialize-ProgressBar
-
-$total = 100
-for ($i = 0; $i -le $total; $i++) {
-    Write-Host "Processing item $i..."
-    Write-ProgressBar -Current $i -Total $total -Label "Installing"
-    Start-Sleep -Milliseconds 50
-}
-
-Complete-ProgressBar
-```
-
-### Async usage
-
-The bar runs in a background runspace and animates on its own. Your code just calls `Update-ProgressBar` whenever progress changes:
-
-```powershell
-. ./progress_bar.ps1
-
-Start-ProgressBar -Total 100 -Label "Installing"
-
-for ($i = 0; $i -le 100; $i++) {
-    Invoke-Work $i           # variable-length work — bar keeps spinning
-    Update-ProgressBar -Current $i
-    Write-PBLog "Step $i done"
-}
-
-Stop-ProgressBar
-```
-
-### API
-
-**Synchronous**
-
-| Function | Signature | Description |
-|---|---|---|
-| `Initialize-ProgressBar` | `Initialize-ProgressBar` | Reserve the last terminal line. Call once before the loop. |
-| `Write-ProgressBar` | `Write-ProgressBar -Current n -Total n [-Label s]` | Draw the bar. Call on each iteration. |
-| `Complete-ProgressBar` | `Complete-ProgressBar` | Restore the terminal. Call once after the loop. |
-
-**Async**
-
-| Function | Signature | Description |
-|---|---|---|
-| `Start-ProgressBar` | `Start-ProgressBar -Total n [-Label s]` | Start the background renderer (runspace). |
-| `Update-ProgressBar` | `Update-ProgressBar -Current n` | Send a progress value from the calculation. |
-| `Stop-ProgressBar` | `Stop-ProgressBar` | Stop the renderer and restore the terminal. |
-
-**Spinner**
-
-| Function | Signature | Description |
-|---|---|---|
-| `Set-ProgressBarSpinner` | `Set-ProgressBarSpinner [-Style s]` | Switch spinner style. Resets the frame index. |
-
-**Parameters for `Write-ProgressBar` / `Start-ProgressBar`:**
-
-- `-Current` / `-Total` — current and total step count
-- `-Label` _(optional)_ — text printed left of the bar, truncated/padded to 20 characters
-
-**Spinner styles:**
-
-| Style | Preview |
-|---|---|
-| `Braille` _(default)_ | `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` |
-| `Classic` | `\| / - \` |
-| `Arrows` | `← ↑ → ↓` |
-| `Bounce` | `▁ ▂ ▃ ▄ ▅ ▆ ▇ █ ▇ ▆ ▅ ▄ ▃ ▂` |
-| `Circle` | `◐ ◓ ◑ ◒` |
-
-```powershell
-Set-ProgressBarSpinner -Style Classic
-```
-
-**Color**
-
-| Function | Signature | Description |
-|---|---|---|
-| `Set-ProgressBarColor` | `Set-ProgressBarColor [-Mode s]` | Set color mode for the filled bar segment. |
-
-Color modes:
-
-| Mode | Behavior |
-|---|---|
-| `Auto` _(default)_ | Red < 33%, yellow 33–65%, green ≥ 66% |
-| `None` | No color |
-| `Red` \| `Yellow` \| `Green` \| `Cyan` \| `Blue` \| `Magenta` | Fixed color |
-
-```powershell
-Set-ProgressBarColor -Mode Auto    # default: percent-based
-Set-ProgressBarColor -Mode Green   # always green
-Set-ProgressBarColor -Mode None    # disable color
-```
-
-**Log-safe output**
-
-| Function | Signature | Description |
-|---|---|---|
-| `Write-PBLog` | `Write-PBLog <message>` | Safe `Write-Host` replacement during async bar usage. |
-
-In async mode `Write-Host` and the background runspace write to the terminal concurrently, which can cause visual glitches. `Write-PBLog` routes output through the renderer so all terminal writes are serialized. In sync mode it falls back to plain `Write-Host`.
-
-```powershell
-Start-ProgressBar -Total 100 -Label "Installing"
-for ($i = 0; $i -le 100; $i++) {
-    Invoke-Work $i
-    Update-ProgressBar -Current $i
-    Write-PBLog "Step $i done"   # use Write-PBLog instead of Write-Host in async mode
-}
-Stop-ProgressBar
-```
-
-### Running the demo
-
-```powershell
-pwsh progress_bar.ps1
-```
-
-## How it works
-
-### Synchronous mode
-
-Both implementations use the same ANSI terminal mechanism:
-
-1. **Init** sets the scroll region (`ESC[top;bottomr` / `tput csr`) to exclude the last row. Any `echo`/`Write-Host` output scrolls only within that region, leaving the last line untouched.
-2. **Draw** saves the cursor (`ESC 7`), jumps to the last line (`ESC[row;colH`), draws the bar, then restores the cursor (`ESC 8`) — so regular output continues from exactly where it left off.
-3. **Done** resets the scroll region to full height and clears the reserved line.
-
-### Async mode
-
-The async renderer runs independently of the main process/thread and must solve two extra problems:
-
-**Correct terminal dimensions in a background context**
-
-- **Bash**: background subshells have stdin redirected to `/dev/null`, which can prevent `tput lines`/`tput cols` from querying the terminal size (causing the bar to be drawn at the wrong row). The async renderer uses `stty size </dev/tty` instead, which reliably reads dimensions from any background process.
-- **PowerShell**: `[Console]::WindowHeight` can return 0 inside a runspace. The dimensions are captured from the main thread at `Start-ProgressBar` time and stored in the shared state as a fallback.
-
-**Preventing output from interleaving**
-
-- **Bash**: the entire frame (save-cursor + jump + clear + bar + restore-cursor) is built into a single `printf` call and written to `/dev/tty` directly. One `printf` = one atomic write, so it cannot interleave character-by-character with the main process's `echo`.
-- **PowerShell**: the frame is assembled into a single string and emitted with one `[Console]::Write` call. The runspace and main thread each produce one atomic write per operation, so escape sequences are never split.
-
-Unicode bar characters (`█`, `░`, braille spinner) are built via string concatenation in both implementations — never with byte-oriented tools like `tr` — so multibyte UTF-8 characters are never corrupted.
