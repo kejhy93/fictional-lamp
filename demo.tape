@@ -12,7 +12,7 @@ Set Padding 20
 Sleep 500ms
 
 # --- Demo 1: simple unlabeled bar ---
-Type "source progress_bar.sh && demo_simple"
+Type "source bash/progress_bar.sh && demo_simple"
 Enter
 # 51 iterations × 0.05 s each ≈ 2.6 s
 Sleep 4s
